@@ -625,6 +625,11 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_BIN:$PATH"
           export PATH="/usr/lib/ccache:$PATH"
           cd ./common
+          # 修复缺失的 Kconfig 引用
+          if [ -f drivers/base/Kconfig ]; then
+            sed -i 's|source "drivers/base/kernelFwUpdate/Kconfig"|# & (missing, commented by build)|' drivers/base/Kconfig || true
+          fi
+          # 确定 defconfig 文件
           if [ -f arch/arm64/configs/gki_defconfig ]; then
             DEFCONFIG="gki_defconfig"
           else
