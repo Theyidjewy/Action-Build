@@ -62,9 +62,9 @@ on:
         default: ""
       BUILD_TIME:
         type: string
-        description: "自定义构建时间(输入F使用当前UTC时间)"
+        description: "自定义构建时间(输入F使用当前UTC时间，示例：：Fri Dec 12 11:37:03 UTC 2025）"
         required: false
-        default: "Fri Dec 12 11:37:03 UTC 2025"
+        default: "F"
       FAST_BUILD:
         type: boolean
         description: "启用极速构建"
@@ -94,7 +94,7 @@ on:
         type: boolean
         description: "添加风驰驱动1.0"
         required: true
-        default: false
+        default: true
       DROID_SPACES:
         type: boolean
         description: "添加DroidSpaces容器支持"
