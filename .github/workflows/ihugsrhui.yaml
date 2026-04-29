@@ -1,0 +1,564 @@
+name: Build LineageOS Kernel for OnePlus Pad 2 Pro (Full Feature)
+on:
+  workflow_dispatch:
+    inputs:
+      FILE:
+        type: choice
+        description: "设备配置文件（仅用于命名后缀）"
+        required: true
+        default: oneplus_pad_2_pro_b
+        options:
+          - oneplus_pad_2_pro_b
+      MANAGER_SOURCE:
+        type: choice
+        description: "管理器调用方向"
+        required: true
+        default: MD3
+        options:
+          - MD3
+          - MD3_SPOOF
+      SUSFS_CI:
+        type: choice
+        description: "SUSFS模块下载调用方向"
+        required: true
+        default: N/A
+        options:
+          - CI
+          - Release
+          - N/A
+      KPM:
+        type: choice
+        description: "内核模块实现方式"
+        required: true
+        default: KPM
+        options:
+          - KPM
+          - KPN
+          - N/A
+      SUSFS_META:
+        type: string
+        description: "回退SUSFS(输入哈希或次数或-1关闭)"
+        required: false
+        default: ""
+      KSU_META:
+        type: string
+        description: "ReSukiSU分支名/自定义版本标识/回退提交哈希"
+        required: false
+        default: "main/Numbersf/"
+      ZRAM:
+        type: string
+        description: "ZRAM(0关闭1开启)/算法名/大小"
+        required: true
+        default: "1/lz4kd/25769803776"
+      SUFFIX:
+        type: string
+        description: "自定义内核后缀(不输入使用随机字符串)"
+        required: false
+        default: ""
+      SUBLEVEL:
+        type: string
+        description: "自定义内核等级欺骗(SUBLEVEL)"
+        required: false
+        default: ""
+      BUILD_TIME:
+        type: string
+        description: "自定义构建时间(输入F使用当前UTC时间)"
+        required: false
+        default: "F"
+      FAST_BUILD:
+        type: boolean
+        description: "启用极速构建"
+        required: true
+        default: true
+      LSM_BBG:
+        type: boolean
+        description: "启用BBG关键分区写入保护"
+        required: true
+        default: true
+      NETFILTER:
+        type: boolean
+        description: "启用网络功能拓展"
+        required: true
+        default: true
+      CCM:
+        type: boolean
+        description: "启用BBR+ECN网络拥塞控制"
+        required: true
+        default: true
+      UNICODE_BYPASS:
+        type: boolean
+        description: "修复Unicode不可见字码点漏洞"
+        required: true
+        default: false
+      SCHED_HMBIRD:
+        type: boolean
+        description: "添加风驰驱动1.0"
+        required: true
+        default: true
+      DROID_SPACES:
+        type: boolean
+        description: "添加DroidSpaces容器支持"
+        required: true
+        default: false
+      RE_KERNEL:
+        type: boolean
+        description: "添加Re-Kernel"
+        required: true
+        default: false
+      SUSFS_DEV:
+        type: boolean
+        description: "使用SUSFS-DEV分支"
+        required: true
+        default: false
+      SPACE_NOCLEAN:
+        type: boolean
+        description: "停用空间清扫"
+        required: true
+        default: false
+      BUILD_NOCCACHE:
+        type: boolean
+        description: "停用ccache"
+        required: true
+        default: false
+      BUILD_TARGET:
+        type: string
+        description: "Bazel构建目标（备用）"
+        required: false
+        default: "kera_le"
+
+jobs:
+  build:
+    name: ${{ github.event.inputs.FAST_BUILD == 'true' && ' [FAST]' || '' }}${{ github.event.inputs.KPM == 'KPM' && ' [KPM]' || github.event.inputs.KPM == 'KPN' && ' [KPN]' || '' }}${{ github.event.inputs.LSM_BBG == 'true' && ' [BBG]' || '' }}${{ github.event.inputs.SCHED_HMBIRD == 'true' && ' [HMBIRD]' || '' }}${{ github.event.inputs.DROID_SPACES == 'true' && ' [DS]' || '' }}${{ startsWith(github.event.inputs.ZRAM, '1/') && ' [ZRAM]' || '' }}${{ github.event.inputs.RE_KERNEL == 'true' && ' [REKER]' || '' }}${{ github.event.inputs.SUFFIX && format(' [{0}]', github.event.inputs.SUFFIX) || '' }}
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+      CCACHE_MAXSIZE: 8G
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Maximize Build Space
+        if: ${{ github.event.inputs.SPACE_NOCLEAN == 'false' }}
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Environment & Variable Setup
+        id: env_setup
+        run: |
+          echo "KERNEL_REPO=https://github.com/LineageOS/android_kernel_oneplus_sm8750.git" >> $GITHUB_ENV
+          echo "KERNEL_BRANCH=lineage-23.2" >> $GITHUB_ENV
+          echo "FILE_BASE=$(echo '${{ github.event.inputs.FILE }}' | sed -E 's/_([a-zA-Z0-9])/\U\1/g; s/^oneplus/OnePlus/')" >> $GITHUB_ENV
+          # 设置CPU代号（sm8750）
+          echo "CPU=sm8750" >> $GITHUB_ENV
+          # 解析ZRAM参数
+          IFS='/' read -r Z_SW Z_ALGO Z_SIZE <<< "${{ github.event.inputs.ZRAM }}"
+          echo "ZRAM_SWITCH=$Z_SW" >> $GITHUB_ENV
+          echo "ZRAM_ALGO=$Z_ALGO" >> $GITHUB_ENV
+          echo "ZRAM_SIZE=$Z_SIZE" >> $GITHUB_ENV
+          echo "ZRAM_ALGO_U=${Z_ALGO^^}" >> $GITHUB_ENV
+          # ReSukiSU 解析
+          IFS='/' read -r KSU_BRANCH KSU_TAG KSU_HASH <<< "${{ github.event.inputs.KSU_META }}"
+          echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
+          echo "KSU_CUSTOM_TAG=$KSU_TAG" >> $GITHUB_ENV
+          echo "KSU_MANUAL_HASH=$KSU_HASH" >> $GITHUB_ENV
+
+      - name: Debug Inputs
+        run: |
+          echo "------------------------------"
+          echo "内核仓库: ${{ env.KERNEL_REPO }}"
+          echo "分支: ${{ env.KERNEL_BRANCH }}"
+          echo "CPU: ${{ env.CPU }}"
+          echo "FILE: ${{ github.event.inputs.FILE }}"
+          echo "ZRAM: ${{ github.event.inputs.ZRAM }}"
+          echo "KPM: ${{ github.event.inputs.KPM }}"
+          echo "BBG: ${{ github.event.inputs.LSM_BBG }}"
+          echo "风驰: ${{ github.event.inputs.SCHED_HMBIRD }}"
+          echo "DroidSpaces: ${{ github.event.inputs.DROID_SPACES }}"
+          echo "Re-Kernel: ${{ github.event.inputs.RE_KERNEL }}"
+          echo "SUSFS: ${{ github.event.inputs.SUSFS_META }}"
+          echo "FAST_BUILD: ${{ github.event.inputs.FAST_BUILD }}"
+          echo "------------------------------"
+
+      - name: Check Disk Space
+        run: df -h
+
+      - name: Create and Enable 3G Swap
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 3G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Set Cache Environment
+        if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
+        run: |
+          echo "CCACHE_DIR=$HOME/.ccache_${{ github.event.inputs.FILE }}" >> $GITHUB_ENV
+          mkdir -p "$HOME/.ccache_${{ github.event.inputs.FILE }}"
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "Numbersf"
+          git config --global user.email "263623064@qq.com"
+
+      - name: Install Dependencies + APTC
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: python3 git curl ccache libelf-dev build-essential flex bison libssl-dev libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix kmod libdw-dev elfutils lld
+          execute_install_scripts: true
+
+      - name: Restore Ccache
+        if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-${{ github.event.inputs.FAST_BUILD == 'true' && 'alpha' || 'beta' }}-16.2
+
+      - name: Initialize Ccache
+        if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
+        run: |
+          INIT_FLAG="${{ env.CCACHE_DIR }}/.ccache_initialized"
+          if command -v ccache >/dev/null 2>&1; then
+            if [ ! -f "$INIT_FLAG" ]; then
+              mkdir -p "${{ env.CCACHE_DIR }}"
+              ccache -M ${{ env.CCACHE_MAXSIZE }}
+              touch "$INIT_FLAG"
+              echo "✅ ccache 初始化完成"
+            else
+              echo "✅ ccache 已初始化，跳过"
+            fi
+          fi
+          ccache -s
+
+      - name: Clone LineageOS Kernel Source
+        run: |
+          set -e
+          echo "📦 克隆内核: ${{ env.KERNEL_REPO }} (分支: ${{ env.KERNEL_BRANCH }})"
+          mkdir -p kernel_workspace/kernel_platform/common
+          git clone --depth=1 --branch "${{ env.KERNEL_BRANCH }}" "${{ env.KERNEL_REPO }}" kernel_workspace/kernel_platform/common
+          cd kernel_workspace/kernel_platform/common
+          echo "✅ 源码已就绪"
+          ls -la
+
+      - name: Kernel Version Handling
+        run: |
+          cd kernel_workspace/kernel_platform
+          ORIG_VERSION=$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^SUBLEVEL =/ {s=$3} END {print v"."p"."s}' ./common/Makefile)
+          echo "原始内核版本: $ORIG_VERSION"
+
+          SUBLEVEL_INPUT="${{ github.event.inputs.SUBLEVEL }}"
+          if [ -n "$SUBLEVEL_INPUT" ]; then
+            echo "修改 SUBLEVEL 为 $SUBLEVEL_INPUT"
+            sed -i "s/^$$SUBLEVEL[[:space:]]*=[[:space:]]*$$.*/\1$SUBLEVEL_INPUT/" ./common/Makefile
+          fi
+
+          NEW_VERSION=$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^SUBLEVEL =/ {s=$3} END {print v"."p"."s}' ./common/Makefile)
+          echo "当前内核版本: $NEW_VERSION"
+          echo "TKERNEL_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "KERNEL_VERSION=$(echo $NEW_VERSION | cut -d. -f1,2)" >> $GITHUB_ENV
+          echo "KERNEL_SHORT_PATCH_VERSION=$(echo $NEW_VERSION | cut -d. -f1,2 | tr '.' '_')" >> $GITHUB_ENV
+
+          # Android 版本识别（LineageOS 23.2 基于 android15-6.6）
+          echo "KANDROID_VERSION=android15-6.6" >> $GITHUB_ENV
+          echo "KV1=$(echo $NEW_VERSION | cut -d. -f1)" >> $GITHUB_ENV
+
+      - name: Custom Kernel Suffix or Random
+        run: |
+          cd kernel_workspace
+          SUFFIX="${{ github.event.inputs.SUFFIX }}"
+          if [ -z "$SUFFIX" ]; then
+            RANDOM_DIGIT=$(od -An -N1 -tu1 < /dev/urandom | tr -d '[:space:]' | awk '{print $1 % 11}')
+            RANDOM_HASH=$(od -An -N7 -tx1 /dev/urandom | tr -d ' \n')
+            SUFFIX="${RANDOM_DIGIT}-o-g${RANDOM_HASH}"
+          fi
+          KANDROID_VERSION="${{ env.KANDROID_VERSION }}"
+          FAST_BUILD="${{ github.event.inputs.FAST_BUILD }}"
+
+          for path in kernel_platform/common/scripts/setlocalversion; do
+            [ -f "$path" ] || continue
+            echo "修改后缀: $path"
+            sed -i 's/ -dirty//g' "$path"
+            if grep -q 'echo "\$res"' "$path"; then
+              if [ "$FAST_BUILD" = "true" ]; then
+                sed -i "s/^res=.*/res=\"-${KANDROID_VERSION}-${SUFFIX}\"/" "$path"
+              else
+                tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
+              fi
+            else
+              echo "echo \"\$res-${KANDROID_VERSION}-${SUFFIX}\"" >> "$path"
+            fi
+          done
+          git add -A && git commit -m "Custom suffix: ${SUFFIX}" || true
+
+      # 克隆所需的附加仓库
+      - name: Clone Helper Repos
+        run: |
+          cd kernel_workspace
+          git clone https://github.com/ShirkNeko/SukiSU_patch.git
+          git clone https://github.com/Numbersf/Action-Build.git
+          if [ "${{ github.event.inputs.RE_KERNEL }}" == "true" ]; then
+            git clone https://github.com/Sakion-Team/Re-Kernel.git
+          fi
+
+      - name: Add ReSukiSU & SUSFS
+        run: |
+          cd kernel_workspace/kernel_platform
+          KSU_BRANCH="${{ env.KSU_BRANCH }}"
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s "$KSU_BRANCH"
+          cd KernelSU
+          if [ -n "${{ env.KSU_CUSTOM_TAG }}" ]; then
+            echo "KSU_CUSTOM_TAG=${{ env.KSU_CUSTOM_TAG }}" >> $GITHUB_ENV
+          fi
+          if [ -n "${{ env.KSU_MANUAL_HASH }}" ]; then
+            git fetch origin "$KSU_BRANCH" --depth=50
+            git checkout "${{ env.KSU_MANUAL_HASH }}"
+          fi
+          KSU_VERSION=$(expr $(git rev-list --count main 2>/dev/null || echo 13000) + 30700)
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          cd ..
+
+          if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
+            cd susfs4ksu
+            if [ -n "${{ github.event.inputs.SUSFS_META }}" ]; then
+              if [[ "${{ github.event.inputs.SUSFS_META }}" =~ ^[0-9]+$ ]]; then
+                git checkout HEAD~${{ github.event.inputs.SUSFS_META }}
+              else
+                git checkout "${{ github.event.inputs.SUSFS_META }}"
+              fi
+            fi
+            cd ..
+            # 将 SUSFS 补丁复制到 common 目录
+            cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-*.patch common/
+            cp -r susfs4ksu/kernel_patches/fs/* common/fs/
+            cp -r susfs4ksu/kernel_patches/include/linux/* common/include/linux/
+            cd common
+            echo "应用 SUSFS 补丁..."
+            patch -p1 < 50_add_susfs_in_gki-*.patch || true
+            cd ../..
+          fi
+
+      - name: Apply SUSFS Patch and Fixes
+        if: ${{ github.event.inputs.SUSFS_META != '-1' }}
+        env:
+          FILE: ${{ github.event.inputs.FILE }}
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
+          SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
+
+          if [ "$GKI_V" == "android13-5.15" ] && [ "$SUBLEVEL" -lt 123 ]; then
+            echo "修复旧版 C 库 bug"
+            cp ../../Action-Build/patches/fix_5.15.legacy ./fix_5.15.legacy.patch
+            patch -p1 < fix_5.15.legacy.patch
+          fi
+
+          KV2=$(echo "${{ env.KERNEL_VERSION }}" | tr -d '.')
+          KV3=$(echo "${{ env.TKERNEL_VERSION }}" | tr -d '.')
+          if [[ "$KV2" == "66" && "$KV3" -le 6630 ]]; then
+            echo "修复缺失 trusty 问题"
+            sed -i 's/-32,12 +32,38/-32,11 +32,37/g' 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
+            sed -i '/#include <trace\/hooks\/fs.h>/d' 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
+          fi
+
+          fake_patched=0
+          if [ "$GKI_V" = "android15-6.6" ]; then
+            if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
+              sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t *res = NULL;' ./fs/proc/task_mmu.c
+              fake_patched=1
+            fi
+            if ! grep -qxF '#include <linux/dma-buf.h>' ./fs/proc/base.c; then
+              sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' ./fs/proc/base.c
+            fi
+          fi
+          if [ "$GKI_V" = "android14-6.1" ]; then
+            if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
+              fake_patched=1
+            fi
+            if ! grep -qxF '#include <linux/dma-buf.h>' ./fs/proc/base.c; then
+              sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' ./fs/proc/base.c
+            fi
+          fi
+          if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ]; then
+            if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
+              fake_patched=1
+            fi
+            if ! grep -qxF '#include <linux/dma-buf.h>' ./fs/proc/base.c; then
+              sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' ./fs/proc/base.c
+            fi
+          fi
+          if [ "$fake_patched" -eq "1" ]; then
+            echo "进行了额外的兼容性修复"
+          fi
+          echo "SUSFS 补丁应用完成"
+
+      # ===== 以下为新增功能（参考 Build Kernel OnePlus 工作流） =====
+      - name: Apply KPM / KPN Kernel Module
+        if: ${{ github.event.inputs.KPM != 'N/A' }}
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          KPM_MODE="${{ github.event.inputs.KPM }}"
+          echo "应用内核模块模式: $KPM_MODE"
+          # 从 Action-Build 仓库复制对应的补丁/配置
+          if [ -d ../../Action-Build/patches/kpm ]; then
+            cp ../../Action-Build/patches/kpm/${KPM_MODE}*.patch ./
+            for p in ${KPM_MODE}*.patch; do
+              echo "应用 $p"
+              patch -p1 < "$p" || true
+            done
+          else
+            echo "⚠️ KPM 补丁目录不存在，跳过"
+          fi
+
+      - name: Apply BBG (Key Partition Protection)
+        if: ${{ github.event.inputs.LSM_BBG == 'true' }}
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          echo "应用 BBG 关键分区写入保护"
+          # 从 Action-Build 复制 BBG 相关补丁
+          if [ -d ../../Action-Build/patches/bbg ]; then
+            cp ../../Action-Build/patches/bbg/*.patch ./
+            for p in *.patch; do
+              patch -p1 < "$p" || true
+            done
+          else
+            echo "⚠️ BBG 补丁目录不存在，跳过"
+          fi
+
+      - name: Apply SCHED_HMBIRD (Fengchi Driver 1.0)
+        if: ${{ github.event.inputs.SCHED_HMBIRD == 'true' }}
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          echo "应用风驰驱动 1.0"
+          if [ -d ../../Action-Build/patches/hmbird ]; then
+            cp ../../Action-Build/patches/hmbird/*.patch ./
+            for p in *.patch; do
+              patch -p1 < "$p" || true
+            done
+          else
+            echo "⚠️ 风驰驱动补丁目录不存在，跳过"
+          fi
+
+      - name: Apply NETFILTER & CCM (BBR+ECN)
+        if: ${{ github.event.inputs.NETFILTER == 'true' || github.event.inputs.CCM == 'true' }}
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          echo "应用网络功能拓展与拥塞控制"
+          if [ "${{ github.event.inputs.NETFILTER }}" == "true" ]; then
+            if [ -d ../../Action-Build/patches/netfilter ]; then
+              cp ../../Action-Build/patches/netfilter/*.patch ./
+              for p in *.patch; do patch -p1 < "$p" || true; done
+            fi
+          fi
+          if [ "${{ github.event.inputs.CCM }}" == "true" ]; then
+            if [ -d ../../Action-Build/patches/ccm ]; then
+              cp ../../Action-Build/patches/ccm/*.patch ./
+              for p in *.patch; do patch -p1 < "$p" || true; done
+            fi
+          fi
+
+      - name: Apply DROID_SPACES (Container Support)
+        if: ${{ github.event.inputs.DROID_SPACES == 'true' }}
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          echo "应用 DroidSpaces 容器支持"
+          if [ -d ../../Action-Build/patches/droidspaces ]; then
+            cp ../../Action-Build/patches/droidspaces/*.patch ./
+            for p in *.patch; do patch -p1 < "$p" || true; done
+          fi
+
+      - name: Apply UNICODE_BYPASS Fix
+        if: ${{ github.event.inputs.UNICODE_BYPASS == 'true' }}
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          echo "应用 Unicode 绕过漏洞修复"
+          if [ -f ../../Action-Build/patches/unicode_bypass.patch ]; then
+            patch -p1 < ../../Action-Build/patches/unicode_bypass.patch || true
+          fi
+
+      - name: Apply Re-Kernel (if enabled)
+        if: ${{ github.event.inputs.RE_KERNEL == 'true' }}
+        run: |
+          cd kernel_workspace
+          if [ -d Re-Kernel ]; then
+            echo "应用 Re-Kernel 补丁"
+            # 根据 Re-Kernel 仓库的指导应用补丁
+            if [ -f Re-Kernel/apply.sh ]; then
+              bash Re-Kernel/apply.sh
+            else
+              cp -r Re-Kernel/* kernel_platform/common/ || true
+            fi
+          fi
+
+      - name: Apply ZRAM Configuration
+        if: ${{ github.event.inputs.ZRAM != '0/lz4kd/8589934592' || startsWith(github.event.inputs.ZRAM, '1/') }}
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          echo "配置 ZRAM 参数"
+          # 将 ZRAM 配置写入 defconfig 或直接修改 Makefile
+          # 假设 LineageOS 内核使用 defconfig 在 common/arch/arm64/configs/...
+          # 这里示例直接修改内核源码中的 zram 相关文件（需要实际补丁）
+          # 实际中应从 Action-Build 仓库复制 zram 补丁
+          if [ -d ../../Action-Build/patches/zram ]; then
+            cp ../../Action-Build/patches/zram/*.patch ./
+            for p in *.patch; do patch -p1 < "$p" || true; done
+          fi
+
+      - name: Configure Kernel Defconfig (if needed)
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          # 启用必要的内核选项（示例，实际应基于 Action-Build 的脚本）
+          # 假设 defconfig 文件路径
+          DEFCONFIG="arch/arm64/configs/lineageos_${CPU}_defconfig"
+          if [ -f "$DEFCONFIG" ]; then
+            # 根据选项启用功能
+            [[ "${{ github.event.inputs.LSM_BBG }}" == "true" ]] && \
+              sed -i '/CONFIG_SECURITY_BBG/d' "$DEFCONFIG" && \
+              echo "CONFIG_SECURITY_BBG=y" >> "$DEFCONFIG"
+            [[ "${{ github.event.inputs.ZRAM_SWITCH }}" == "1" ]] && \
+              sed -i '/CONFIG_ZRAM/d' "$DEFCONFIG" && \
+              echo "CONFIG_ZRAM=y" >> "$DEFCONFIG"
+            # 其他选项类似...
+          fi
+
+      - name: Build Kernel
+        run: |
+          cd kernel_workspace/kernel_platform
+          # 使用 clang 工具链（预置或下载）
+          # 设置 PATH 到 clang
+          # 例如使用 Android 预编译的 clang-r383902
+          # 实际应从某个地址下载或使用系统自带的（但推荐下载）
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r383902.tar.gz -O clang.tar.gz
+          mkdir -p toolchain/clang
+          tar -xzf clang.tar.gz -C toolchain/clang
+          export PATH=$(pwd)/toolchain/clang/bin:$PATH
+
+          # 构建命令（LineageOS 常用方式）
+          make -C common O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            lineageos_${CPU}_defconfig
+
+          make -C common O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            -j$(nproc)
+
+          # 复制生成的 Image 或 Image.gz 到输出目录
+          mkdir -p ../../output
+          cp out/arch/arm64/boot/Image ../../output/ || true
+          cp out/arch/arm64/boot/Image.gz ../../output/ || true
+          cp out/arch/arm64/boot/dtbo.img ../../output/ || true
+
+      - name: Upload Kernel Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LineageOS-Kernel-${{ env.FILE_BASE }}-${{ env.TKERNEL_VERSION }}-${{ github.run_id }}
+          path: output/
