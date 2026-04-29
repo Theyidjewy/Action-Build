@@ -347,10 +347,11 @@ jobs:
               fi
             fi
             cd ..
-            cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-*.patch kernel_platform/common/
-            cp -r susfs4ksu/kernel_patches/fs/* kernel_platform/common/fs/
-            cp -r susfs4ksu/kernel_patches/include/linux/* kernel_platform/common/include/linux/
-            cd kernel_platform/common
+            # 将 SUSFS 补丁复制到 common 目录
+            cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-*.patch common/
+            cp -r susfs4ksu/kernel_patches/fs/* common/fs/
+            cp -r susfs4ksu/kernel_patches/include/linux/* common/include/linux/
+            cd common
             echo "应用 SUSFS 补丁..."
             patch -p1 < 50_add_susfs_in_gki-*.patch || true
             cd ../..
