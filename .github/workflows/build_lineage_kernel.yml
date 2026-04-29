@@ -401,6 +401,12 @@ jobs:
           fi
           echo "SUSFS 补丁应用完成"
 
+      - name: Debug KPM patches
+        run: |
+          echo "Current directory: $(pwd)"
+          echo "Listing ../../Action-Build/patches/kpm:"
+          ls -la ../../Action-Build/patches/kpm/ || echo "Directory not found"
+
       # ===== 以下为新增功能（参考 Build Kernel OnePlus 工作流） =====
       - name: Apply KPM / KPN Kernel Module
         if: ${{ github.event.inputs.KPM != 'N/A' }}
@@ -408,13 +414,20 @@ jobs:
           cd kernel_workspace/kernel_platform/common
           KPM_MODE="${{ github.event.inputs.KPM }}"
           echo "应用内核模块模式: $KPM_MODE"
-          # 从 Action-Build 仓库复制对应的补丁/配置
           if [ -d ../../Action-Build/patches/kpm ]; then
-            cp ../../Action-Build/patches/kpm/${KPM_MODE}*.patch ./
-            for p in ${KPM_MODE}*.patch; do
-              echo "应用 $p"
-              patch -p1 < "$p" || true
-            done
+            # 启用 nullglob，避免通配符无匹配时保留原样
+            shopt -s nullglob
+            files=(../../Action-Build/patches/kpm/${KPM_MODE}*.patch)
+            if [ ${#files[@]} -gt 0 ]; then
+              cp "${files[@]}" ./
+              for p in "${files[@]}"; do
+                p=$(basename "$p")
+                echo "应用 $p"
+                patch -p1 < "$p" || true
+              done
+            else
+              echo "⚠️ 未找到 ${KPM_MODE}*.patch 文件，跳过"
+            fi
           else
             echo "⚠️ KPM 补丁目录不存在，跳过"
           fi
