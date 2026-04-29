@@ -154,7 +154,7 @@ jobs:
         id: env_setup
         run: |
           echo "KERNEL_REPO=https://github.com/LineageOS/android_kernel_oneplus_sm8750.git" >> $GITHUB_ENV
-          echo "KERNEL_BRANCH=lineage-24.0" >> $GITHUB_ENV
+          echo "KERNEL_BRANCH=lineage-23.2" >> $GITHUB_ENV
           echo "FILE_BASE=$(echo '${{ github.event.inputs.FILE }}' | sed -E 's/_([a-zA-Z0-9])/\U\1/g; s/^oneplus/OnePlus/')" >> $GITHUB_ENV
           # 设置CPU代号（必须！）
           echo "CPU=sm8750" >> $GITHUB_ENV
