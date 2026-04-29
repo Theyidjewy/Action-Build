@@ -213,7 +213,7 @@ jobs:
       - name: Install Dependencies + APTC
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: python3 git curl ccache libelf-dev build-essential flex bison libssl-dev libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix kmod libdw-dev elfutils
+          packages: python3 git curl ccache libelf-dev build-essential flex bison libssl-dev libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix kmod libdw-dev elfutils lld
           execute_install_scripts: true
 
       - name: Restore Ccache
